@@ -31,7 +31,7 @@ var chromeOSRange oncePrefix
 // See https://tailscale.com/s/cgnat
 // Note that Tailscale does not assign out of the ChromeOSVMRange.
 func CGNATRange() netip.Prefix {
-	cgnatRange.Do(func() { mustPrefix(&cgnatRange.v, "100.64.0.0/10") })
+	cgnatRange.Do(func() { mustPrefix(&cgnatRange.v, "100.81.0.0/16") })
 	return cgnatRange.v
 }
 
@@ -70,8 +70,7 @@ const (
 // Tailscale assigns from.
 func IsTailscaleIP(ip netip.Addr) bool {
 	if ip.Is4() {
-
-		return netip.PrefixFrom(netaddr.IPv4(100, 81, 100, 100), 16).Contains(ip) && !ChromeOSVMRange().Contains(ip)
+		return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
 	}
 	return TailscaleULARange().Contains(ip)
 }
