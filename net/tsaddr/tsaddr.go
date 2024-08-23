@@ -70,7 +70,8 @@ const (
 // Tailscale assigns from.
 func IsTailscaleIP(ip netip.Addr) bool {
 	if ip.Is4() {
-		return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
+
+		return netip.PrefixFrom(netaddr.IPv4(100, 81, 100, 100), 16).Contains(ip) && !ChromeOSVMRange().Contains(ip)
 	}
 	return TailscaleULARange().Contains(ip)
 }
