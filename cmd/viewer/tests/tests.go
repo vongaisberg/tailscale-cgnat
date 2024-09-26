@@ -13,7 +13,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers --clone-only-type=OnlyGetClone
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct --clone-only-type=OnlyGetClone
 
 type StructWithoutPtrs struct {
 	Int int
@@ -201,4 +201,35 @@ type StructWithContainers struct {
 	CloneableGenericContainer Container[*GenericNoPtrsStruct[int]]
 	CloneableMap              MapContainer[int, *StructWithPtrs]
 	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
+}
+
+type (
+	StructWithPtrsAlias        = StructWithPtrs
+	StructWithoutPtrsAlias     = StructWithoutPtrs
+	StructWithPtrsAliasView    = StructWithPtrsView
+	StructWithoutPtrsAliasView = StructWithoutPtrsView
+)
+
+type StructWithTypeAliasFields struct {
+	WithPtr    StructWithPtrsAlias
+	WithoutPtr StructWithoutPtrsAlias
+
+	WithPtrByPtr    *StructWithPtrsAlias
+	WithoutPtrByPtr *StructWithoutPtrsAlias
+
+	SliceWithPtrs    []*StructWithPtrsAlias
+	SliceWithoutPtrs []*StructWithoutPtrsAlias
+
+	MapWithPtrs    map[string]*StructWithPtrsAlias
+	MapWithoutPtrs map[string]*StructWithoutPtrsAlias
+
+	MapOfSlicesWithPtrs    map[string][]*StructWithPtrsAlias
+	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
+}
+
+type integer = constraints.Integer
+
+type GenericTypeAliasStruct[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]] struct {
+	NonCloneable T
+	Cloneable    T2
 }

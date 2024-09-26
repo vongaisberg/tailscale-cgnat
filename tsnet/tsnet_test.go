@@ -5,6 +5,7 @@ package tsnet
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -31,8 +32,11 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"golang.org/x/net/proxy"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -813,5 +817,169 @@ func TestUDPConn(t *testing.T) {
 	t.Logf("got: %q", got)
 	if string(got) != "world" {
 		t.Errorf("got %q, want world", got)
+	}
+}
+
+// testWarnable is a Warnable that is used within this package for testing purposes only.
+var testWarnable = health.Register(&health.Warnable{
+	Code:     "test-warnable-tsnet",
+	Title:    "Test warnable",
+	Severity: health.SeverityLow,
+	Text: func(args health.Args) string {
+		return args[health.ArgError]
+	},
+})
+
+func parseMetrics(m []byte) (map[string]float64, error) {
+	metrics := make(map[string]float64)
+
+	var parser expfmt.TextParser
+	mf, err := parser.TextToMetricFamilies(bytes.NewReader(m))
+	if err != nil {
+		return nil, err
+	}
+
+	for _, f := range mf {
+		for _, ff := range f.Metric {
+			val := float64(0)
+
+			switch f.GetType() {
+			case dto.MetricType_COUNTER:
+				val = ff.GetCounter().GetValue()
+			case dto.MetricType_GAUGE:
+				val = ff.GetGauge().GetValue()
+			}
+
+			metrics[f.GetName()+promMetricLabelsStr(ff.GetLabel())] = val
+		}
+	}
+
+	return metrics, nil
+}
+
+func promMetricLabelsStr(labels []*dto.LabelPair) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("{")
+	for i, l := range labels {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(fmt.Sprintf("%s=%q", l.GetName(), l.GetValue()))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func TestUserMetrics(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	controlURL, c := startControl(t)
+	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+
+	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: []netip.Prefix{
+				netip.MustParsePrefix("192.0.2.0/24"),
+				netip.MustParsePrefix("192.0.3.0/24"),
+				netip.MustParsePrefix("192.0.5.1/32"),
+				netip.MustParsePrefix("0.0.0.0/0"),
+			},
+		},
+		AdvertiseRoutesSet: true,
+	})
+	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("192.0.5.1/32"),
+		netip.MustParsePrefix("0.0.0.0/0"),
+	})
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("pinging: %s", err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	ht := s1.lb.HealthTracker()
+	ht.SetUnhealthy(testWarnable, health.Args{"Text": "Hello world 1"})
+
+	// Force an update to the netmap to ensure that the metrics are up-to-date.
+	s1.lb.DebugForceNetmapUpdate()
+	s2.lb.DebugForceNetmapUpdate()
+
+	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLc()
+	metrics1, err := lc1.UserMetrics(ctxLc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status1, err := lc1.Status(ctxLc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics1, err := parseMetrics(metrics1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics1:\n%s\n", metrics1)
+
+	// The node is advertising 4 routes:
+	// - 192.0.2.0/24
+	// - 192.0.3.0/24
+	// - 192.0.5.1/32
+	if got, want := parsedMetrics1["tailscaled_advertised_routes"], 3.0; got != want {
+		t.Errorf("metrics1, tailscaled_advertised_routes: got %v, want %v", got, want)
+	}
+
+	// Validate the health counter metric against the status of the node
+	if got, want := parsedMetrics1[`tailscaled_health_messages{type="warning"}`], float64(len(status1.Health)); got != want {
+		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
+	}
+
+	metrics2, err := lc2.UserMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status2, err := lc2.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics2, err := parseMetrics(metrics2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics2:\n%s\n", metrics2)
+
+	// The node is advertising 0 routes
+	if got, want := parsedMetrics2["tailscaled_advertised_routes"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_advertised_routes: got %v, want %v", got, want)
+	}
+
+	// Validate the health counter metric against the status of the node
+	if got, want := parsedMetrics2[`tailscaled_health_messages{type="warning"}`], float64(len(status2.Health)); got != want {
+		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
 	}
 }

@@ -50,6 +50,7 @@ func TestInjectInboundLeak(t *testing.T) {
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +108,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -750,7 +752,7 @@ func TestHandleLocalPackets(t *testing.T) {
 			Dst:       netip.MustParseAddrPort("100.100.100.100:53"),
 			TCPFlags:  packet.TCPSyn,
 		}
-		resp := impl.handleLocalPackets(pkt, impl.tundev)
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
 		if resp != filter.DropSilently {
 			t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
 		}
@@ -767,7 +769,7 @@ func TestHandleLocalPackets(t *testing.T) {
 			Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
 			TCPFlags: packet.TCPSyn,
 		}
-		resp := impl.handleLocalPackets(pkt, impl.tundev)
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
 
 		// DropSilently is the outcome we expected, since we actually
 		// handled this packet by injecting it into netstack, which
@@ -789,7 +791,7 @@ func TestHandleLocalPackets(t *testing.T) {
 			Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:63:a01:109]:5678"),
 			TCPFlags: packet.TCPSyn,
 		}
-		resp := impl.handleLocalPackets(pkt, impl.tundev)
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
 
 		// Accept means that handleLocalPackets does not handle this
 		// packet, we "accept" it to continue further processing,
